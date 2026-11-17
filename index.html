@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>B2B 다중 화재 감지기 IoT 통합 관제 시스템</title>
+    <!-- MQTT 실시간 IoT 통신 라이브러리 -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0d1117; --panel-bg: #161b22; --border-color: #30363d;
+            --text-main: #c9d1d9; --text-muted: #8b949e; --accent-blue: #58a6ff;
+            --led-green: #3fb950; --led-yellow: #d29922; --led-red: #f85149; --led-white: #ffffff;
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Malgun Gothic', sans-serif;
+            background-color: var(--bg-color); color: var(--text-main);
+            margin: 0; padding: 15px; min-height: 100vh;
+            display: flex; justify-content: center; align-items: center;
+        }
+
+        /* 1. 초기 역할 선택 화면 */
+        #role-selection {
+            display: flex; flex-direction: column; gap: 15px; text-align: center;
+            max-width: 420px; width: 100%; background: var(--panel-bg);
+            padding: 30px; border-radius: 16px; border: 1px solid var(--border-color);
+        }
+        .role-btn {
+            padding: 18px 25px; font-size: 17px; font-weight: bold; border-radius: 12px;
+            border: none; cursor: pointer; color: white; transition: 0.2s;
+            display: flex; flex-direction: column; align-items: center; gap: 5px;
+        }
+        .role-btn span { font-size: 12px; font-weight: normal; opacity: 0.85; }
+        .role-btn:active { transform: scale(0.97); }
+        .btn-dashboard { background-color: #238636; }
+        .btn-controller { background-color: #1f6feb; }
+
+        /* 2. 관제실 대시보드 화면 (아이패드 / PC / QR 접속자용) */
+        #dashboard-view {
+            display: none; width: 100%; max-width: 1300px; flex-direction: column; gap: 15px;
+        }
+        .top-bar {
+            display: flex; justify-content: space-between; align-items: center;
+            background: var(--panel-bg); padding: 15px 25px; border-radius: 12px;
+            border: 1px solid var(--border-color); flex-wrap: wrap; gap: 15px;
+        }
+        .top-title h1 { margin: 0 0 5px 0; font-size: 22px; color: var(--accent-blue); }
+        .top-title p { margin: 0; font-size: 13px; color: var(--text-muted); }
+        
+        /* QR 코드 박스 */
+        .qr-box {
+            display: flex; align-items: center; gap: 12px; background: #090c10;
+            padding: 8px 15px; border-radius: 10px; border: 1px solid var(--border-color);
+        }
+        .qr-box img { width: 64px; height: 64px; border-radius: 6px; background: white; padding: 3px; }
+        .qr-info { font-size: 12px; line-height: 1.4; }
+        .qr-info strong { color: var(--led-green); display: block; font-size: 13px; }
+
+        /* 4대 기기 그리드 */
+        .devices-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px;
+        }
+        .device-card {
+            background: var(--panel-bg); border: 1px solid var(--border-color);
+            border-radius: 12px; padding: 20px; display: flex; flex-direction: column;
+            align-items: center; transition: 0.3s; position: relative;
+        }
+        .device-card.alarm { border-color: var(--led-red); box-shadow: 0 0 20px rgba(248, 81, 73, 0.3); }
+        .card-header {
+            width: 100%; display: flex; justify-content: space-between; align-items: center;
+            font-weight: bold; font-size: 16px; border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px; margin-bottom: 15px;
+        }
+        .zone-tag { font-size: 11px; padding: 3px 8px; border-radius: 4px; background: #21262d; color: var(--text-muted); }
+        
+        .led-circle {
+            width: 85px; height: 85px; border-radius: 50%; background-color: var(--led-green);
+            box-shadow: 0 0 30px var(--led-green); border: 4px solid #090c10;
+            margin: 10px 0 15px 0; transition: all 0.3s;
+        }
+        .status-label { font-size: 18px; font-weight: bold; color: var(--led-green); margin-bottom: 15px; }
+        
+        .metrics { width: 100%; display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
+        .metric-row { display: flex; justify-content: space-between; background: #090c10; padding: 8px 12px; border-radius: 6px; }
+        .metric-val { font-weight: bold; color: white; }
+
+        .log-panel {
+            background: #090c10; border: 1px solid var(--border-color); border-radius: 12px;
+            padding: 15px; height: 140px; overflow-y: auto; font-family: monospace; font-size: 13px;
+        }
+        .log-item { margin-bottom: 6px; border-bottom: 1px dashed #21262d; padding-bottom: 4px; }
+
+        /* 3. 발표자 조종기 화면 (휴대폰용 - 4대 개별 제어) */
+        #controller-view {
+            display: none; flex-direction: column; align-items: center; width: 100%; max-width: 420px; gap: 15px;
+        }
+        .device-tabs {
+            display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; width: 100%;
+        }
+        .tab-btn {
+            padding: 12px 5px; background: #21262d; border: 1px solid var(--border-color);
+            color: var(--text-muted); border-radius: 8px; font-weight: bold; font-size: 13px; cursor: pointer;
+        }
+        .tab-btn.active { background: var(--accent-blue); color: #000; border-color: var(--accent-blue); }
+        
+        #touch-sensor {
+            width: 220px; height: 220px; border-radius: 50%; background-color: var(--led-green);
+            box-shadow: 0 0 40px var(--led-green); border: 8px solid #21262d;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            cursor: pointer; user-select: none; transition: 0.2s; margin: 10px 0;
+        }
+        #touch-sensor:active { transform: scale(0.95); }
+        #ctrl-dust { font-size: 48px; font-weight: bold; color: #000; margin: 0; }
+        
+        .ctrl-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; }
+        .c-btn {
+            padding: 15px; border-radius: 10px; border: none; font-weight: bold; font-size: 14px;
+            color: white; background: #21262d; cursor: pointer;
+        }
+        .c-btn.fire { background: #da3633; grid-column: span 2; }
+        .c-btn.reset-all { background: #238636; grid-column: span 2; }
+        
+        .conn-badge {
+            position: fixed; top: 10px; right: 10px; font-size: 11px;
+            background: #161b22; padding: 4px 10px; border-radius: 20px; border: 1px solid #30363d;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="conn-badge" id="conn-badge">📡 서버 연결 중...</div>
+
+    <!-- 1. 역할 선택 화면 -->
+    <div id="role-selection">
+        <h2 style="margin:0; color:white;">🏭 B2B AI 화재 감지기 관제</h2>
+        <p style="margin:0 0 10px 0; font-size:14px; color:var(--text-muted);">접속하실 기기의 역할을 선택해 주세요.</p>
+        
+        <button class="role-btn btn-dashboard" onclick="initMode('dashboard')">
+            💻 중앙 관제실 모니터 (감시자용)
+            <span>4대 기기 실시간 모니터링 + 공유용 QR코드 표시</span>
+        </button>
+        
+        <button class="role-btn btn-controller" onclick="initMode('controller')">
+            📱 현장 센서 시뮬레이터 (발표자용)
+            <span>4대 기기를 각각 선택해 먼지·습도·화재 조종</span>
+        </button>
+    </div>
+
+    <!-- 2. 중앙 관제실 화면 (아이패드 / PC / QR 접속자) -->
+    <div id="dashboard-view">
+        <div class="top-bar">
+            <div class="top-title">
+                <h1>🏭 산업용 AI 4색 스마트 화재 감지기 통합 관제</h1>
+                <p>전원: 소방 상시 유선(24V) | 통신: 실시간 MQTT 클라우드 동기화</p>
+            </div>
+            <!-- QR 코드 자동 생성 영역 -->
+            <div class="qr-box">
+                <img id="qr-img" src="" alt="접속 QR">
+                <div class="qr-info">
+                    <strong>📱 감시자용 모바일 접속 QR</strong>
+                    카메라로 스캔 시 교수님·참관객도<br>실시간 관제 화면에 동시 접속됩니다.
+                </div>
+            </div>
+        </div>
+
+        <!-- 4대 기기 카드 그리드 -->
+        <div class="devices-grid" id="devices-grid"></div>
+
+        <!-- 실시간 시스템 로그 -->
+        <div class="log-panel" id="sys-log">
+            <div class="log-item" style="color:var(--accent-blue);">[System] 4개 구역(A~D동) 다중 관제 서버가 가동되었습니다. 우측 상단 QR코드로 다중 접속이 가능합니다.</div>
+        </div>
+    </div>
+
+    <!-- 3. 발표자 조종기 화면 (휴대폰) -->
+    <div id="controller-view">
+        <h3 style="margin:0; color:white;">📱 다중 감지기 원격 시뮬레이터</h3>
+        <p style="margin:0; font-size:13px; color:var(--text-muted);">조종할 구역을 선택한 뒤 중앙 원을 터치하세요</p>
+        
+        <!-- 4대 기기 선택 탭 -->
+        <div class="device-tabs">
+            <button class="tab-btn active" onclick="selectDevice(0)">1. A동 창고</button>
+            <button class="tab-btn" onclick="selectDevice(1)">2. B동 라인</button>
+            <button class="tab-btn" onclick="selectDevice(2)">3. C동 지하</button>
+            <button class="tab-btn" onclick="selectDevice(3)">4. D동 분진</button>
+        </div>
+
+        <div id="selected-name" style="font-weight:bold; color:var(--accent-blue); font-size:16px;">현재 제어 중: A동 제1물류창고</div>
+
+        <!-- 터치 렌즈 -->
+        <div id="touch-sensor" onclick="touchAddDust()">
+            <p id="ctrl-dust">12</p>
+            <span style="color:#000; font-weight:bold; font-size:14px;">터치하여 먼지 누적 (㎍/㎥)</span>
+        </div>
+
+        <div class="ctrl-actions">
+            <button class="c-btn" onclick="triggerEvent('humidity')">⚪ 고습도(수증기) 발생</button>
+            <button class="c-btn" onclick="triggerEvent('reset')">🟢 해당 기기 청소(초기화)</button>
+            <button class="c-btn fire" onclick="triggerEvent('fire')">🔥 해당 구역 실제 화재 발생</button>
+            <button class="c-btn reset-all" onclick="triggerEvent('resetAll')">🔄 4대 전체 시스템 초기화</button>
+        </div>
+    </div>
+
+    <script>
+        // 공용 MQTT 브로커 및 고유 토픽 설정
+        const brokerUrl = 'wss://broker.emqx.io:8084/mqtt';
+        const topic = 'b2b-ai-fire-multi-demo-2026-kr';
+        let client;
+
+        // 4대 감지기 초기 상태 데이터
+        const defaultDevices = [
+            { id: 0, name: 'A동 제1물류창고', zone: '고층 랙 구역', dust: 12, temp: 21, hum: 45, mode: 'normal' },
+            { id: 1, name: 'B동 조립생산라인', zone: '지게차 이동로', dust: 18, temp: 24, hum: 42, mode: 'normal' },
+            { id: 2, name: 'C동 지하보관창고', zone: '결로·다습 구역', dust: 10, temp: 18, hum: 58, mode: 'normal' },
+            { id: 3, name: 'D동 분체도장실', zone: '고분진 집중 구역', dust: 25, temp: 26, hum: 40, mode: 'normal' }
+        ];
+
+        let devices = JSON.parse(JSON.stringify(defaultDevices));
+        let activeIdx = 0; // 휴대폰에서 현재 선택된 기기 번호
+
+        // QR 코드 자동 생성 (현재 접속한 웹사이트 URL 기반)
+        window.onload = () => {
+            const currentUrl = encodeURIComponent(window.location.href);
+            document.getElementById('qr-img').src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${currentUrl}`;
+            renderDashboardCards();
+            
+            // URL 파라미터에 ?view=dashboard 가 있으면 바로 관제 화면으로 진입 (QR 스캔 시 편리)
+            if (window.location.search.includes('view=dashboard')) {
+                initMode('dashboard');
+            }
+        };
+
+        function initMode(mode) {
+            document.getElementById('role-selection').style.display = 'none';
+            client = mqtt.connect(brokerUrl);
+
+            client.on('connect', () => {
+                const badge = document.getElementById('conn-badge');
+                badge.innerText = '🟢 실시간 IoT 망 연결됨';
+                badge.style.color = '#3fb950';
+
+                // 양쪽 모두 토픽을 구독해 상태 동기화 유지
+                client.subscribe(topic);
+
+                if (mode === 'dashboard') {
+                    document.getElementById('dashboard-view').style.display = 'flex';
+                    // QR 코드 URL에 자동 관제실 진입 파라미터 추가
+                    const baseUrl = window.location.href.split('?')[0];
+                    const qrTarget = encodeURIComponent(baseUrl + '?view=dashboard');
+                    document.getElementById('qr-img').src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${qrTarget}`;
+                } else {
+                    document.getElementById('controller-view').style.display = 'flex';
+                    updateControllerUI();
+                }
+            });
+
+            client.on('message', (t, msg) => {
+                const payload = JSON.parse(msg.toString());
+                if (payload.type === 'sync') {
+                    devices = payload.devices;
+                    renderDashboardCards();
+                    updateControllerUI();
+                    if (payload.log) addLog(payload.log, payload.logColor);
+                }
+            });
+        }
+
+        /* --- 관제실 카드 렌더링 --- */
+        function renderDashboardCards() {
+            const grid = document.getElementById('devices-grid');
+            grid.innerHTML = '';
+
+            devices.forEach(dev => {
+                let ledColor = 'var(--led-green)';
+                let statusText = '정상 감시 중';
+                let isAlarm = false;
+
+                if (dev.mode === 'fire') {
+                    ledColor = 'var(--led-red)';
+                    statusText = '🔥 실제 화재! 즉각 경보';
+                    isAlarm = true;
+                } else if (dev.mode === 'humidity') {
+                    ledColor = 'var(--led-white)';
+                    statusText = '⚪ 고습도(수증기) 방어';
+                } else {
+                    if (dev.dust >= 350) {
+                        ledColor = 'var(--led-red)';
+                        statusText = '🔴 한계 초과 (핀셋 청소)';
+                        isAlarm = true;
+                    } else if (dev.dust >= 150) {
+                        ledColor = 'var(--led-yellow)';
+                        statusText = '🟡 분진 누적 (AI 영점보정)';
+                    }
+                }
+
+                const card = document.createElement('div');
+                card.className = `device-card ${isAlarm ? 'alarm' : ''}`;
+                card.innerHTML = `
+                    <div class="card-header">
+                        <span>${dev.id + 1}. ${dev.name}</span>
+                        <span class="zone-tag">${dev.zone}</span>
+                    </div>
+                    <div class="led-circle" style="background-color:${ledColor}; box-shadow: 0 0 30px ${ledColor};"></div>
+                    <div class="status-label" style="color:${ledColor};">${statusText}</div>
+                    <div class="metrics">
+                        <div class="metric-row"><span>분진 농도</span><span class="metric-val">${dev.dust} ㎍/㎥</span></div>
+                        <div class="metric-row"><span>실내 온도</span><span class="metric-val">${dev.temp}°C</span></div>
+                        <div class="metric-row"><span>실내 습도</span><span class="metric-val">${dev.hum}%</span></div>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        /* --- 휴대폰 조종기 로직 --- */
+        function selectDevice(idx) {
+            activeIdx = idx;
+            document.querySelectorAll('.tab-btn').forEach((btn, i) => {
+                btn.classList.toggle('active', i === idx);
+            });
+            document.getElementById('selected-name').innerText = `현재 제어 중: ${devices[idx].name}`;
+            updateControllerUI();
+        }
+
+        function updateControllerUI() {
+            const dev = devices[activeIdx];
+            document.getElementById('ctrl-dust').innerText = dev.dust;
+            const lens = document.getElementById('touch-sensor');
+
+            let color = 'var(--led-green)';
+            if (dev.mode === 'fire' || dev.dust >= 350) color = 'var(--led-red)';
+            else if (dev.mode === 'humidity') color = 'var(--led-white)';
+            else if (dev.dust >= 150) color = 'var(--led-yellow)';
+
+            lens.style.backgroundColor = color;
+            lens.style.boxShadow = `0 0 40px ${color}`;
+        }
+
+        function touchAddDust() {
+            const dev = devices[activeIdx];
+            dev.mode = 'normal';
+            dev.dust += Math.floor(Math.random() * 35) + 30;
+            if (dev.dust > 500) dev.dust = 500;
+
+            let logMsg = null;
+            let logColor = '#c9d1d9';
+            if (dev.dust >= 150 && dev.dust < 210) {
+                logMsg = `🟡 [${dev.name}] 분진 누적 감지(${dev.dust}㎍/㎥). AI가 오작동 방지를 위해 기준점을 자동 보정합니다.`;
+                logColor = '#d29922';
+            } else if (dev.dust >= 350 && dev.dust < 410) {
+                logMsg = `🔴 [${dev.name}] 필터 한계치 초과! 작업자 앱으로 '핀셋 청소' 유지보수 리포트를 발송했습니다.`;
+                logColor = '#f85149';
+            }
+
+            publishSync(logMsg, logColor);
+        }
+
+        function triggerEvent(action) {
+            const dev = devices[activeIdx];
+            let logMsg = '';
+            let logColor = '#c9d1d9';
+
+            if (action === 'humidity') {
+                dev.mode = 'humidity';
+                dev.hum = 97;
+                logMsg = `⚪ [${dev.name}] 습도 97% 급상승! AI가 수증기로 판별하여 비화재보(오작동) 경보를 차단했습니다.`;
+                logColor = '#ffffff';
+            } else if (action === 'fire') {
+                dev.mode = 'fire';
+                dev.temp = 78;
+                dev.dust = 999;
+                logMsg = `🔥 [긴급/투트랙] ${dev.name} 실제 화재 연기 및 고온(78°C) 감지! 지연 없이 즉각 소방 수신기 연동!`;
+                logColor = '#f85149';
+            } else if (action === 'reset') {
+                devices[activeIdx] = JSON.parse(JSON.stringify(defaultDevices[activeIdx]));
+                logMsg = `🟢 [${dev.name}] 핀셋 점검 및 청소가 완료되어 정상 모드로 복귀했습니다.`;
+                logColor = '#3fb950';
+            } else if (action === 'resetAll') {
+                devices = JSON.parse(JSON.stringify(defaultDevices));
+                logMsg = `🔄 [전체 초기화] 4개 구역 모든 감지기가 정상 감시 상태로 초기화되었습니다.`;
+                logColor = '#58a6ff';
+            }
+
+            publishSync(logMsg, logColor);
+        }
+
+        function publishSync(logMsg, logColor) {
+            updateControllerUI();
+            renderDashboardCards();
+            if (client && client.connected) {
+                client.publish(topic, JSON.stringify({
+                    type: 'sync',
+                    devices: devices,
+                    log: logMsg,
+                    logColor: logColor
+                }));
+            }
+        }
+
+        function addLog(text, color) {
+            const box = document.getElementById('sys-log');
+            const time = new Date().toLocaleTimeString('ko-KR', { hour12: false });
+            const div = document.createElement('div');
+            div.className = 'log-item';
+            div.style.color = color || '#c9d1d9';
+            div.innerText = `[${time}] ${text}`;
+            box.prepend(div);
+        }
+    </script>
+</body>
+</html>
